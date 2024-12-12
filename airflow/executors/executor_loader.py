@@ -18,12 +18,9 @@
 
 from __future__ import annotations
 
-import functools
 import logging
-import os
 from typing import TYPE_CHECKING
 
-from airflow.api_internal.internal_api_call import InternalApiConfig
 from airflow.exceptions import AirflowConfigException, UnknownExecutorException
 from airflow.executors.executor_constants import (
     CELERY_EXECUTOR,
@@ -52,8 +49,6 @@ _module_to_executors: dict[str, ExecutorName] = {}
 _classname_to_executors: dict[str, ExecutorName] = {}
 # Used to cache the computed ExecutorNames so that we don't need to read/parse config more than once
 _executor_names: list[ExecutorName] = []
-# Used to cache executors so that we don't construct executor objects unnecessarily
-_loaded_executors: dict[ExecutorName, BaseExecutor] = {}
 
 
 class ExecutorLoader:
@@ -166,22 +161,6 @@ class ExecutorLoader:
         return default_executor
 
     @classmethod
-    def set_default_executor(cls, executor: BaseExecutor) -> None:
-        """
-        Externally set an executor to be the default.
-
-        This is used in rare cases such as dag.test which allows, as a user convenience, to provide
-        the executor by cli/argument instead of Airflow configuration
-        """
-        exec_class_name = executor.__class__.__qualname__
-        exec_name = ExecutorName(f"{executor.__module__}.{exec_class_name}")
-
-        _module_to_executors[exec_name.module_path] = exec_name
-        _classname_to_executors[exec_class_name] = exec_name
-        _executor_names.insert(0, exec_name)
-        _loaded_executors[exec_name] = executor
-
-    @classmethod
     def init_executors(cls) -> list[BaseExecutor]:
         """Create a new instance of all configured executors if not cached already."""
         executor_names = cls._get_executor_names()
@@ -229,10 +208,6 @@ class ExecutorLoader:
         else:
             _executor_name = executor_name
 
-        # Check if the executor has been previously loaded. Avoid constructing a new object
-        if _executor_name in _loaded_executors:
-            return _loaded_executors[_executor_name]
-
         try:
             if _executor_name.alias == CELERY_KUBERNETES_EXECUTOR:
                 executor = cls.__load_celery_kubernetes_executor()
@@ -255,77 +230,32 @@ class ExecutorLoader:
         # instance. This makes it easier for the Scheduler, Backfill, etc to
         # know how we refer to this executor.
         executor.name = _executor_name
-        # Cache this executor by name here, so we can look it up later if it is
-        # requested again, and not have to construct a new object
-        _loaded_executors[_executor_name] = executor
 
         return executor
 
     @classmethod
-    def import_executor_cls(
-        cls, executor_name: ExecutorName, validate: bool = True
-    ) -> tuple[type[BaseExecutor], ConnectorSource]:
+    def import_executor_cls(cls, executor_name: ExecutorName) -> tuple[type[BaseExecutor], ConnectorSource]:
         """
         Import the executor class.
 
         Supports the same formats as ExecutorLoader.load_executor.
 
         :param executor_name: Name of core executor or module path to executor.
-        :param validate: Whether or not to validate the executor before returning
 
         :return: executor class via executor_name and executor import source
         """
-
-        def _import_and_validate(path: str) -> type[BaseExecutor]:
-            executor = import_string(path)
-            if validate:
-                cls.validate_database_executor_compatibility(executor)
-            return executor
-
-        return _import_and_validate(executor_name.module_path), executor_name.connector_source
+        return import_string(executor_name.module_path), executor_name.connector_source
 
     @classmethod
-    def import_default_executor_cls(cls, validate: bool = True) -> tuple[type[BaseExecutor], ConnectorSource]:
+    def import_default_executor_cls(cls) -> tuple[type[BaseExecutor], ConnectorSource]:
         """
         Import the default executor class.
-
-        :param validate: Whether or not to validate the executor before returning
 
         :return: executor class and executor import source
         """
         executor_name = cls.get_default_executor_name()
-        executor, source = cls.import_executor_cls(executor_name, validate=validate)
+        executor, source = cls.import_executor_cls(executor_name)
         return executor, source
-
-    @classmethod
-    @functools.lru_cache(maxsize=None)
-    def validate_database_executor_compatibility(cls, executor: type[BaseExecutor]) -> None:
-        """
-        Validate database and executor compatibility.
-
-        Most of the databases work universally, but SQLite can only work with
-        single-threaded executors (e.g. Sequential).
-
-        This is NOT done in ``airflow.configuration`` (when configuration is
-        initialized) because loading the executor class is heavy work we want to
-        avoid unless needed.
-        """
-        # Single threaded executors can run with any backend.
-        if executor.is_single_threaded:
-            return
-
-        # This is set in tests when we want to be able to use SQLite.
-        if os.environ.get("_AIRFLOW__SKIP_DATABASE_EXECUTOR_COMPATIBILITY_CHECK") == "1":
-            return
-
-        if InternalApiConfig.get_use_internal_api():
-            return
-
-        from airflow.settings import engine
-
-        # SQLite only works with single threaded executors
-        if engine.dialect.name == "sqlite":
-            raise AirflowConfigException(f"error: cannot use SQLite with the {executor.__name__}")
 
     @classmethod
     def __load_celery_kubernetes_executor(cls) -> BaseExecutor:

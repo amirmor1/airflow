@@ -47,6 +47,7 @@ const TriggerDAGModal: React.FC<TriggerDAGModalProps> = ({
       dagId,
       dataIntervalEnd: "",
       dataIntervalStart: "",
+      notes: "",
       runId: "",
     }),
     [dagId],
@@ -75,7 +76,11 @@ const TriggerDAGModal: React.FC<TriggerDAGModalProps> = ({
           <VStack align="start" gap={4}>
             <Heading size="xl">
               Trigger DAG - {dagDisplayName}{" "}
-              <TogglePause dagId={dagParams.dagId} isPaused={isPaused} />
+              <TogglePause
+                dagId={dagParams.dagId}
+                isPaused={isPaused}
+                skipConfirm
+              />
             </Heading>
             {isPaused ? (
               <Alert status="warning" title="Paused DAG">

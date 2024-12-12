@@ -17,7 +17,6 @@
 # under the License.
 from __future__ import annotations
 
-import datetime
 import os
 import pathlib
 import sys
@@ -30,7 +29,6 @@ import pytest
 from airflow import settings
 from airflow.callbacks.callback_requests import TaskCallbackRequest
 from airflow.configuration import TEST_DAGS_FOLDER, conf
-from airflow.dag_processing.manager import DagFileProcessorAgent
 from airflow.dag_processing.processor import DagFileProcessor, DagFileProcessorProcess
 from airflow.models import DagBag, DagModel, TaskInstance
 from airflow.models.serialized_dag import SerializedDagModel
@@ -41,7 +39,7 @@ from airflow.utils.state import State
 from airflow.utils.types import DagRunType
 
 from tests_common.test_utils.asserts import assert_queries_count
-from tests_common.test_utils.compat import AIRFLOW_V_3_0_PLUS, ParseImportError
+from tests_common.test_utils.compat import ParseImportError
 from tests_common.test_utils.config import conf_vars, env_vars
 from tests_common.test_utils.db import (
     clear_db_dags,
@@ -52,6 +50,7 @@ from tests_common.test_utils.db import (
     clear_db_serialized_dags,
 )
 from tests_common.test_utils.mock_executor import MockExecutor
+from tests_common.test_utils.version_compat import AIRFLOW_V_3_0_PLUS
 
 if AIRFLOW_V_3_0_PLUS:
     from airflow.utils.types import DagRunTriggeredByType
@@ -108,19 +107,14 @@ class TestDagFileProcessor:
         self.clean_db()
 
     def _process_file(self, file_path, dag_directory, session):
-        dag_file_processor = DagFileProcessor(
-            dag_ids=[], dag_directory=str(dag_directory), log=mock.MagicMock()
-        )
+        dag_file_processor = DagFileProcessor(dag_directory=str(dag_directory), log=mock.MagicMock())
 
         dag_file_processor.process_file(file_path, [])
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     @patch.object(TaskInstance, "handle_failure")
     def test_execute_on_failure_callbacks(self, mock_ti_handle_failure):
         dagbag = DagBag(dag_folder="/dev/null", include_examples=True, read_dags_from_db=False)
-        dag_file_processor = DagFileProcessor(
-            dag_ids=[], dag_directory=TEST_DAGS_FOLDER, log=mock.MagicMock()
-        )
+        dag_file_processor = DagFileProcessor(dag_directory=TEST_DAGS_FOLDER, log=mock.MagicMock())
         with create_session() as session:
             session.query(TaskInstance).delete()
             dag = dagbag.get_dag("example_branch_operator")
@@ -147,7 +141,6 @@ class TestDagFileProcessor:
             error="Message", test_mode=conf.getboolean("core", "unit_test_mode"), session=session
         )
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     @pytest.mark.parametrize(
         ["has_serialized_dag"],
         [pytest.param(True, id="dag_in_db"), pytest.param(False, id="no_dag_found")],
@@ -155,9 +148,7 @@ class TestDagFileProcessor:
     @patch.object(TaskInstance, "handle_failure")
     def test_execute_on_failure_callbacks_without_dag(self, mock_ti_handle_failure, has_serialized_dag):
         dagbag = DagBag(dag_folder="/dev/null", include_examples=True, read_dags_from_db=False)
-        dag_file_processor = DagFileProcessor(
-            dag_ids=[], dag_directory=TEST_DAGS_FOLDER, log=mock.MagicMock()
-        )
+        dag_file_processor = DagFileProcessor(dag_directory=TEST_DAGS_FOLDER, log=mock.MagicMock())
         with create_session() as session:
             session.query(TaskInstance).delete()
             dag = dagbag.get_dag("example_branch_operator")
@@ -189,12 +180,9 @@ class TestDagFileProcessor:
             error="Message", test_mode=conf.getboolean("core", "unit_test_mode"), session=session
         )
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     def test_failure_callbacks_should_not_drop_hostname(self):
         dagbag = DagBag(dag_folder="/dev/null", include_examples=True, read_dags_from_db=False)
-        dag_file_processor = DagFileProcessor(
-            dag_ids=[], dag_directory=TEST_DAGS_FOLDER, log=mock.MagicMock()
-        )
+        dag_file_processor = DagFileProcessor(dag_directory=TEST_DAGS_FOLDER, log=mock.MagicMock())
         dag_file_processor.UNIT_TEST_MODE = False
 
         with create_session() as session:
@@ -224,14 +212,11 @@ class TestDagFileProcessor:
             tis = session.query(TaskInstance)
             assert tis[0].hostname == "test_hostname"
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     def test_process_file_should_failure_callback(self, monkeypatch, tmp_path, get_test_dag):
         callback_file = tmp_path.joinpath("callback.txt")
         callback_file.touch()
         monkeypatch.setenv("AIRFLOW_CALLBACK_FILE", str(callback_file))
-        dag_file_processor = DagFileProcessor(
-            dag_ids=[], dag_directory=TEST_DAGS_FOLDER, log=mock.MagicMock()
-        )
+        dag_file_processor = DagFileProcessor(dag_directory=TEST_DAGS_FOLDER, log=mock.MagicMock())
 
         dag = get_test_dag("test_on_failure_callback")
         task = dag.get_task(task_id="test_on_failure_callback_task")
@@ -261,7 +246,6 @@ class TestDagFileProcessor:
         msg = " ".join([str(k) for k in ti.key.primary]) + " fired callback"
         assert msg in callback_file.read_text()
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     @conf_vars({("core", "dagbag_import_error_tracebacks"): "False"})
     def test_add_unparseable_file_before_sched_start_creates_import_error(self, tmp_path):
         unparseable_filename = tmp_path.joinpath(TEMP_DAG_FILENAME).as_posix()
@@ -278,7 +262,6 @@ class TestDagFileProcessor:
             assert import_error.stacktrace == f"invalid syntax ({TEMP_DAG_FILENAME}, line 1)"
             session.rollback()
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     @conf_vars({("core", "dagbag_import_error_tracebacks"): "False"})
     def test_add_unparseable_zip_file_creates_import_error(self, tmp_path):
         zip_filename = (tmp_path / "test_zip.zip").as_posix()
@@ -296,7 +279,6 @@ class TestDagFileProcessor:
             assert import_error.stacktrace == f"invalid syntax ({TEMP_DAG_FILENAME}, line 1)"
             session.rollback()
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     @conf_vars({("core", "dagbag_import_error_tracebacks"): "False"})
     def test_dag_model_has_import_error_is_true_when_import_error_exists(self, tmp_path, session):
         dag_file = os.path.join(TEST_DAGS_FOLDER, "test_example_bash_operator.py")
@@ -323,7 +305,6 @@ class TestDagFileProcessor:
         dm = session.query(DagModel).filter(DagModel.fileloc == temp_dagfile).first()
         assert dm.has_import_errors
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     def test_no_import_errors_with_parseable_dag(self, tmp_path):
         parseable_filename = tmp_path / TEMP_DAG_FILENAME
         parseable_filename.write_text(PARSEABLE_DAG_FILE_CONTENTS)
@@ -336,7 +317,6 @@ class TestDagFileProcessor:
 
             session.rollback()
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     def test_no_import_errors_with_parseable_dag_in_zip(self, tmp_path):
         zip_filename = (tmp_path / "test_zip.zip").as_posix()
         with ZipFile(zip_filename, "w") as zip_file:
@@ -350,7 +330,6 @@ class TestDagFileProcessor:
 
             session.rollback()
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     @conf_vars({("core", "dagbag_import_error_tracebacks"): "False"})
     def test_new_import_error_replaces_old(self, tmp_path):
         unparseable_filename = tmp_path / TEMP_DAG_FILENAME
@@ -375,7 +354,6 @@ class TestDagFileProcessor:
 
         session.rollback()
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     def test_import_error_record_is_updated_not_deleted_and_recreated(self, tmp_path):
         """
         Test that existing import error is updated and new record not created
@@ -403,7 +381,6 @@ class TestDagFileProcessor:
         # assert that the ID of the import error did not change
         assert import_error_1.id == import_error_2.id
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     def test_remove_error_clears_import_error(self, tmp_path):
         filename_to_parse = tmp_path.joinpath(TEMP_DAG_FILENAME).as_posix()
 
@@ -424,7 +401,6 @@ class TestDagFileProcessor:
 
         session.rollback()
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     def test_remove_error_clears_import_error_zip(self, tmp_path):
         session = settings.Session()
 
@@ -447,7 +423,6 @@ class TestDagFileProcessor:
 
         session.rollback()
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     def test_import_error_tracebacks(self, tmp_path):
         unparseable_filename = (tmp_path / TEMP_DAG_FILENAME).as_posix()
         with open(unparseable_filename, "w") as unparseable_file:
@@ -484,7 +459,6 @@ class TestDagFileProcessor:
             )
             session.rollback()
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     @conf_vars({("core", "dagbag_import_error_traceback_depth"): "1"})
     def test_import_error_traceback_depth(self, tmp_path):
         unparseable_filename = tmp_path.joinpath(TEMP_DAG_FILENAME).as_posix()
@@ -517,7 +491,6 @@ class TestDagFileProcessor:
 
             session.rollback()
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     def test_import_error_tracebacks_zip(self, tmp_path):
         invalid_zip_filename = (tmp_path / "test_zip_invalid.zip").as_posix()
         invalid_dag_filename = os.path.join(invalid_zip_filename, TEMP_DAG_FILENAME)
@@ -555,7 +528,6 @@ class TestDagFileProcessor:
             )
             session.rollback()
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     @conf_vars({("core", "dagbag_import_error_traceback_depth"): "1"})
     def test_import_error_tracebacks_zip_depth(self, tmp_path):
         invalid_zip_filename = (tmp_path / "test_zip_invalid.zip").as_posix()
@@ -588,14 +560,12 @@ class TestDagFileProcessor:
             assert import_error.stacktrace == expected_stacktrace.format(invalid_dag_filename)
             session.rollback()
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     @conf_vars({("logging", "dag_processor_log_target"): "stdout"})
     @mock.patch("airflow.dag_processing.processor.settings.dispose_orm", MagicMock)
     @mock.patch("airflow.dag_processing.processor.redirect_stdout")
     def test_dag_parser_output_when_logging_to_stdout(self, mock_redirect_stdout_for_file):
         processor = DagFileProcessorProcess(
             file_path="abc.txt",
-            dag_ids=[],
             dag_directory=[],
             callback_requests=[],
         )
@@ -603,21 +573,18 @@ class TestDagFileProcessor:
             result_channel=MagicMock(),
             parent_channel=MagicMock(),
             file_path="fake_file_path",
-            dag_ids=[],
             thread_name="fake_thread_name",
             callback_requests=[],
             dag_directory=[],
         )
         mock_redirect_stdout_for_file.assert_not_called()
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     @conf_vars({("logging", "dag_processor_log_target"): "file"})
     @mock.patch("airflow.dag_processing.processor.settings.dispose_orm", MagicMock)
     @mock.patch("airflow.dag_processing.processor.redirect_stdout")
     def test_dag_parser_output_when_logging_to_file(self, mock_redirect_stdout_for_file):
         processor = DagFileProcessorProcess(
             file_path="abc.txt",
-            dag_ids=[],
             dag_directory=[],
             callback_requests=[],
         )
@@ -625,7 +592,6 @@ class TestDagFileProcessor:
             result_channel=MagicMock(),
             parent_channel=MagicMock(),
             file_path="fake_file_path",
-            dag_ids=[],
             thread_name="fake_thread_name",
             callback_requests=[],
             dag_directory=[],
@@ -642,7 +608,6 @@ class TestDagFileProcessor:
 
         processor = DagFileProcessorProcess(
             file_path=zip_filename,
-            dag_ids=[],
             dag_directory=[],
             callback_requests=[],
         )
@@ -658,13 +623,11 @@ class TestDagFileProcessor:
 
         processor = DagFileProcessorProcess(
             file_path=dag_filename,
-            dag_ids=[],
             dag_directory=[],
             callback_requests=[],
         )
         processor.start()
 
-    @pytest.mark.skip_if_database_isolation_mode  # Test is broken in db isolation mode
     def test_counter_for_last_num_of_db_queries(self):
         dag_filepath = TEST_DAG_FOLDER / "test_dag_for_db_queries_counter.py"
 
@@ -675,49 +638,3 @@ class TestDagFileProcessor:
                 session=session,
             ):
                 self._process_file(dag_filepath, TEST_DAG_FOLDER, session)
-
-
-class TestProcessorAgent:
-    @pytest.fixture(autouse=True)
-    def per_test(self):
-        self.processor_agent = None
-        yield
-        if self.processor_agent:
-            self.processor_agent.end()
-
-    def test_error_when_waiting_in_async_mode(self, tmp_path):
-        self.processor_agent = DagFileProcessorAgent(
-            dag_directory=tmp_path,
-            max_runs=1,
-            processor_timeout=datetime.timedelta(1),
-            dag_ids=[],
-            async_mode=True,
-        )
-        self.processor_agent.start()
-        with pytest.raises(RuntimeError, match="wait_until_finished should only be called in sync_mode"):
-            self.processor_agent.wait_until_finished()
-
-    def test_default_multiprocessing_behaviour(self, tmp_path):
-        self.processor_agent = DagFileProcessorAgent(
-            dag_directory=tmp_path,
-            max_runs=1,
-            processor_timeout=datetime.timedelta(1),
-            dag_ids=[],
-            async_mode=False,
-        )
-        self.processor_agent.start()
-        self.processor_agent.run_single_parsing_loop()
-        self.processor_agent.wait_until_finished()
-
-    @conf_vars({("core", "mp_start_method"): "spawn"})
-    def test_spawn_multiprocessing_behaviour(self, tmp_path):
-        self.processor_agent = DagFileProcessorAgent(
-            dag_directory=tmp_path,
-            max_runs=1,
-            processor_timeout=datetime.timedelta(1),
-            dag_ids=[],
-            async_mode=False,
-        )
-        self.processor_agent.start()
-        self.processor_agent.run_single_parsing_loop()
-        self.processor_agent.wait_until_finished()

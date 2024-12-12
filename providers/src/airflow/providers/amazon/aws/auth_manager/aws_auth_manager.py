@@ -19,8 +19,9 @@ from __future__ import annotations
 import argparse
 import warnings
 from collections import defaultdict
+from collections.abc import Container, Sequence
 from functools import cached_property
-from typing import TYPE_CHECKING, Container, Sequence, cast
+from typing import TYPE_CHECKING, cast
 
 from flask import session, url_for
 
@@ -38,6 +39,7 @@ from airflow.providers.amazon.aws.auth_manager.security_manager.aws_security_man
     AwsSecurityManagerOverride,
 )
 from airflow.providers.amazon.aws.auth_manager.views.auth import AwsAuthManagerAuthenticationViews
+from airflow.providers.amazon.version_compat import AIRFLOW_V_2_9_PLUS
 
 try:
     from airflow.auth.managers.base_auth_manager import BaseAuthManager, ResourceMethod
@@ -80,12 +82,7 @@ class AwsAuthManager(BaseAuthManager):
     """
 
     def __init__(self, appbuilder: AirflowAppBuilder) -> None:
-        from packaging.version import Version
-
-        from airflow.version import version
-
-        # TODO: remove this if block when min_airflow_version is set to higher than 2.9.0
-        if Version(version) < Version("2.9"):
+        if not AIRFLOW_V_2_9_PLUS:
             raise AirflowOptionalProviderFeatureException(
                 "``AwsAuthManager`` is compatible with Airflow versions >= 2.9."
             )

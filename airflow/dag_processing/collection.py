@@ -31,11 +31,12 @@ import itertools
 import logging
 from typing import TYPE_CHECKING, NamedTuple
 
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import and_, exists, func, select, tuple_
 from sqlalchemy.orm import joinedload, load_only
 
 from airflow.assets.manager import asset_manager
 from airflow.models.asset import (
+    AssetActive,
     AssetAliasModel,
     AssetModel,
     DagScheduleAssetAliasReference,
@@ -44,7 +45,9 @@ from airflow.models.asset import (
 )
 from airflow.models.dag import DAG, DagModel, DagOwnerAttributes, DagTag
 from airflow.models.dagrun import DagRun
+from airflow.models.trigger import Trigger
 from airflow.sdk.definitions.asset import Asset, AssetAlias
+from airflow.triggers.base import BaseTrigger
 from airflow.utils.sqlalchemy import with_row_locks
 from airflow.utils.timezone import utcnow
 from airflow.utils.types import DagRunType
@@ -58,20 +61,6 @@ if TYPE_CHECKING:
     from airflow.typing_compat import Self
 
 log = logging.getLogger(__name__)
-
-
-def _find_orm_dags(dag_ids: Iterable[str], *, session: Session) -> dict[str, DagModel]:
-    """Find existing DagModel objects from DAG objects."""
-    stmt = (
-        select(DagModel)
-        .options(joinedload(DagModel.tags, innerjoin=False))
-        .where(DagModel.dag_id.in_(dag_ids))
-        .options(joinedload(DagModel.schedule_asset_references))
-        .options(joinedload(DagModel.schedule_asset_alias_references))
-        .options(joinedload(DagModel.task_outlet_asset_references))
-    )
-    stmt = with_row_locks(stmt, of=DagModel, session=session)
-    return {dm.dag_id: dm for dm in session.scalars(stmt).unique()}
 
 
 def _create_orm_dags(dags: Iterable[DAG], *, session: Session) -> Iterator[DagModel]:
@@ -179,8 +168,21 @@ class DagModelOperation(NamedTuple):
 
     dags: dict[str, DAG]
 
+    def find_orm_dags(self, *, session: Session) -> dict[str, DagModel]:
+        """Find existing DagModel objects from DAG objects."""
+        stmt = (
+            select(DagModel)
+            .options(joinedload(DagModel.tags, innerjoin=False))
+            .where(DagModel.dag_id.in_(self.dags))
+            .options(joinedload(DagModel.schedule_asset_references))
+            .options(joinedload(DagModel.schedule_asset_alias_references))
+            .options(joinedload(DagModel.task_outlet_asset_references))
+        )
+        stmt = with_row_locks(stmt, of=DagModel, session=session)
+        return {dm.dag_id: dm for dm in session.scalars(stmt).unique()}
+
     def add_dags(self, *, session: Session) -> dict[str, DagModel]:
-        orm_dags = _find_orm_dags(self.dags, session=session)
+        orm_dags = self.find_orm_dags(session=session)
         orm_dags.update(
             (model.dag_id, model)
             for model in _create_orm_dags(
@@ -271,6 +273,40 @@ def _find_all_asset_aliases(dags: Iterable[DAG]) -> Iterator[AssetAlias]:
             for obj in itertools.chain(task.inlets, task.outlets):
                 if isinstance(obj, AssetAlias):
                     yield obj
+
+
+def _find_active_assets(name_uri_assets, session: Session):
+    active_dags = {
+        dm.dag_id
+        for dm in session.scalars(select(DagModel).where(DagModel.is_active).where(~DagModel.is_paused))
+    }
+
+    return set(
+        session.execute(
+            select(
+                AssetModel.name,
+                AssetModel.uri,
+            ).where(
+                tuple_(AssetModel.name, AssetModel.uri).in_(name_uri_assets),
+                exists(
+                    select(1).where(
+                        and_(
+                            AssetActive.name == AssetModel.name,
+                            AssetActive.uri == AssetModel.uri,
+                        ),
+                    )
+                ),
+                exists(
+                    select(1).where(
+                        and_(
+                            DagScheduleAssetReference.asset_id == AssetModel.id,
+                            DagScheduleAssetReference.dag_id.in_(active_dags),
+                        )
+                    )
+                ),
+            )
+        )
+    )
 
 
 class AssetModelOperation(NamedTuple):
@@ -425,3 +461,103 @@ class AssetModelOperation(NamedTuple):
                 for task_id, asset_id in referenced_outlets
                 if (task_id, asset_id) not in orm_refs
             )
+
+    def add_asset_trigger_references(
+        self, assets: dict[tuple[str, str], AssetModel], *, session: Session
+    ) -> None:
+        # Update references from assets being used
+        refs_to_add: dict[tuple[str, str], set[str]] = {}
+        refs_to_remove: dict[tuple[str, str], set[str]] = {}
+        triggers: dict[str, BaseTrigger] = {}
+
+        # Optimization: if no asset collected, skip fetching active assets
+        active_assets = _find_active_assets(self.assets.keys(), session=session) if self.assets else {}
+
+        for name_uri, asset in self.assets.items():
+            # If the asset belong to a DAG not active or paused, consider there is no watcher associated to it
+            asset_watchers = asset.watchers if name_uri in active_assets else []
+            trigger_repr_to_trigger_dict: dict[str, BaseTrigger] = {
+                repr(trigger): trigger for trigger in asset_watchers
+            }
+            triggers.update(trigger_repr_to_trigger_dict)
+            trigger_repr_from_asset: set[str] = set(trigger_repr_to_trigger_dict.keys())
+
+            asset_model = assets[name_uri]
+            trigger_repr_from_asset_model: set[str] = {
+                BaseTrigger.repr(trigger.classpath, trigger.kwargs) for trigger in asset_model.triggers
+            }
+
+            # Optimization: no diff between the DB and DAG definitions, no update needed
+            if trigger_repr_from_asset == trigger_repr_from_asset_model:
+                continue
+
+            diff_to_add = trigger_repr_from_asset - trigger_repr_from_asset_model
+            diff_to_remove = trigger_repr_from_asset_model - trigger_repr_from_asset
+            if diff_to_add:
+                refs_to_add[name_uri] = diff_to_add
+            if diff_to_remove:
+                refs_to_remove[name_uri] = diff_to_remove
+
+        if refs_to_add:
+            all_trigger_reprs: set[str] = {
+                trigger_repr for trigger_reprs in refs_to_add.values() for trigger_repr in trigger_reprs
+            }
+
+            all_trigger_keys: set[tuple[str, str]] = {
+                self._encrypt_trigger_kwargs(triggers[trigger_repr])
+                for trigger_reprs in refs_to_add.values()
+                for trigger_repr in trigger_reprs
+            }
+            orm_triggers: dict[str, Trigger] = {
+                BaseTrigger.repr(trigger.classpath, trigger.kwargs): trigger
+                for trigger in session.scalars(
+                    select(Trigger).where(
+                        tuple_(Trigger.classpath, Trigger.encrypted_kwargs).in_(all_trigger_keys)
+                    )
+                )
+            }
+
+            # Create new triggers
+            new_trigger_models = [
+                trigger
+                for trigger in [
+                    Trigger.from_object(triggers[trigger_repr])
+                    for trigger_repr in all_trigger_reprs
+                    if trigger_repr not in orm_triggers
+                ]
+            ]
+            session.add_all(new_trigger_models)
+            orm_triggers.update(
+                (BaseTrigger.repr(trigger.classpath, trigger.kwargs), trigger)
+                for trigger in new_trigger_models
+            )
+
+            # Add new references
+            for name_uri, trigger_reprs in refs_to_add.items():
+                asset_model = assets[name_uri]
+                asset_model.triggers.extend(
+                    [orm_triggers.get(trigger_repr) for trigger_repr in trigger_reprs]
+                )
+
+        if refs_to_remove:
+            # Remove old references
+            for name_uri, trigger_reprs in refs_to_remove.items():
+                asset_model = assets[name_uri]
+                asset_model.triggers = [
+                    trigger
+                    for trigger in asset_model.triggers
+                    if BaseTrigger.repr(trigger.classpath, trigger.kwargs) not in trigger_reprs
+                ]
+
+        # Remove references from assets no longer used
+        orphan_assets = session.scalars(
+            select(AssetModel).filter(~AssetModel.consuming_dags.any()).filter(AssetModel.triggers.any())
+        )
+        for asset_model in orphan_assets:
+            if (asset_model.name, asset_model.uri) not in self.assets:
+                asset_model.triggers = []
+
+    @staticmethod
+    def _encrypt_trigger_kwargs(trigger: BaseTrigger) -> tuple[str, str]:
+        classpath, kwargs = trigger.serialize()
+        return classpath, Trigger.encrypt_kwargs(kwargs)

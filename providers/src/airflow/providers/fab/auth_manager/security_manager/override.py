@@ -24,7 +24,8 @@ import logging
 import os
 import random
 import uuid
-from typing import TYPE_CHECKING, Any, Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable
 
 import jwt
 import packaging.version
@@ -72,6 +73,7 @@ from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from airflow import __version__ as airflow_version
+from airflow.api_fastapi.app import get_auth_manager
 from airflow.configuration import conf
 from airflow.exceptions import AirflowException
 from airflow.models import DagBag, DagModel
@@ -106,7 +108,6 @@ from airflow.providers.fab.auth_manager.views.user_edit import (
 )
 from airflow.providers.fab.auth_manager.views.user_stats import CustomUserStatsChartView
 from airflow.security import permissions
-from airflow.www.extensions.init_auth_manager import get_auth_manager
 from airflow.www.security_manager import AirflowSecurityManagerV2
 from airflow.www.session import AirflowDatabaseSessionInterface
 

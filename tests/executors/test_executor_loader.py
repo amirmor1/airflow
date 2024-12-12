@@ -16,7 +16,6 @@
 # under the License.
 from __future__ import annotations
 
-from contextlib import nullcontext
 from importlib import reload
 from unittest import mock
 
@@ -31,15 +30,9 @@ from airflow.providers.celery.executors.celery_executor import CeleryExecutor
 
 from tests_common.test_utils.config import conf_vars
 
-pytestmark = pytest.mark.skip_if_database_isolation_mode
-
 
 class FakeExecutor:
-    is_single_threaded = False
-
-
-class FakeSingleThreadedExecutor:
-    is_single_threaded = True
+    pass
 
 
 class TestExecutorLoader:
@@ -84,7 +77,7 @@ class TestExecutorLoader:
         with conf_vars({("core", "executor"): "tests.executors.test_executor_loader.FakeExecutor"}):
             executor = ExecutorLoader.get_default_executor()
             assert executor is not None
-            assert "FakeExecutor" == executor.__class__.__name__
+            assert executor.__class__.__name__ == "FakeExecutor"
             assert executor.name is not None
             assert executor.name == ExecutorName("tests.executors.test_executor_loader.FakeExecutor")
             assert executor.name.connector_source == ConnectorSource.CUSTOM_PATH
@@ -155,7 +148,6 @@ class TestExecutorLoader:
             assert isinstance(executors[0], CeleryExecutor)
             assert "CeleryExecutor" in ExecutorLoader.executors
             assert ExecutorLoader.executors["CeleryExecutor"] == executor_name.module_path
-            assert isinstance(executor_loader._loaded_executors[executor_name], CeleryExecutor)
 
     @pytest.mark.parametrize(
         "executor_config",
@@ -219,33 +211,8 @@ class TestExecutorLoader:
     def test_should_support_import_custom_path(self, executor_config):
         with conf_vars({("core", "executor"): executor_config}):
             executor, import_source = ExecutorLoader.import_default_executor_cls()
-            assert "FakeExecutor" == executor.__name__
+            assert executor.__name__ == "FakeExecutor"
             assert import_source == ConnectorSource.CUSTOM_PATH
-
-    @pytest.mark.db_test
-    @pytest.mark.backend("mysql", "postgres")
-    @pytest.mark.parametrize("executor", [FakeExecutor, FakeSingleThreadedExecutor])
-    def test_validate_database_executor_compatibility_general(self, monkeypatch, executor):
-        monkeypatch.delenv("_AIRFLOW__SKIP_DATABASE_EXECUTOR_COMPATIBILITY_CHECK")
-        ExecutorLoader.validate_database_executor_compatibility(executor)
-
-    @pytest.mark.db_test
-    @pytest.mark.backend("sqlite")
-    @pytest.mark.parametrize(
-        ["executor", "expectation"],
-        [
-            pytest.param(FakeSingleThreadedExecutor, nullcontext(), id="single-threaded"),
-            pytest.param(
-                FakeExecutor,
-                pytest.raises(AirflowConfigException, match=r"^error: cannot use SQLite with the .+"),
-                id="multi-threaded",
-            ),
-        ],
-    )
-    def test_validate_database_executor_compatibility_sqlite(self, monkeypatch, executor, expectation):
-        monkeypatch.delenv("_AIRFLOW__SKIP_DATABASE_EXECUTOR_COMPATIBILITY_CHECK")
-        with expectation:
-            ExecutorLoader.validate_database_executor_compatibility(executor)
 
     def test_load_executor(self):
         with conf_vars({("core", "executor"): "LocalExecutor"}):

@@ -235,7 +235,7 @@ class VersionedFile(NamedTuple):
 
 
 AIRFLOW_PIP_VERSION = "24.3.1"
-AIRFLOW_UV_VERSION = "0.5.3"
+AIRFLOW_UV_VERSION = "0.5.8"
 AIRFLOW_USE_UV = False
 # TODO: automate these as well
 WHEEL_VERSION = "0.44.0"
@@ -777,18 +777,19 @@ def prepare_provider_documentation(
                     with_breaking_changes=with_breaking_changes,
                     maybe_with_new_features=maybe_with_new_features,
                 )
-            with ci_group(
-                f"Updates changelog for last release of package '{provider_id}'",
-                skip_printing_title=only_min_version_update,
-            ):
-                update_changelog(
-                    package_id=provider_id,
-                    base_branch=base_branch,
-                    reapply_templates_only=reapply_templates_only,
-                    with_breaking_changes=with_breaking_changes,
-                    maybe_with_new_features=maybe_with_new_features,
-                    only_min_version_update=only_min_version_update,
-                )
+            if not only_min_version_update:
+                with ci_group(
+                    f"Updates changelog for last release of package '{provider_id}'",
+                    skip_printing_title=only_min_version_update,
+                ):
+                    update_changelog(
+                        package_id=provider_id,
+                        base_branch=base_branch,
+                        reapply_templates_only=reapply_templates_only,
+                        with_breaking_changes=with_breaking_changes,
+                        maybe_with_new_features=maybe_with_new_features,
+                        only_min_version_update=only_min_version_update,
+                    )
         except PrepareReleaseDocsNoChangesException:
             no_changes_packages.append(provider_id)
         except PrepareReleaseDocsChangesOnlyException:
@@ -2195,7 +2196,7 @@ def generate_issue_content_providers(
                     f"[warning]Skipping provider {provider_id}. "
                     "The changelog file doesn't contain any PRs for the release.\n"
                 )
-                return
+                continue
             provider_prs[provider_id] = [pr for pr in prs if pr not in excluded_prs]
             all_prs.update(provider_prs[provider_id])
         g = Github(github_token)
@@ -2245,6 +2246,8 @@ def generate_issue_content_providers(
                 progress.advance(task)
         providers: dict[str, ProviderPRInfo] = {}
         for provider_id in prepared_package_ids:
+            if provider_id not in provider_prs:
+                continue
             pull_request_list = [pull_requests[pr] for pr in provider_prs[provider_id] if pr in pull_requests]
             provider_yaml_dict = yaml.safe_load(
                 (
@@ -2412,6 +2415,7 @@ def print_issue_content(
     all_users: set[str] = set()
     for user_list in users.values():
         all_users.update(user_list)
+    all_users = {user for user in all_users if user != "github-actions[bot]"}
     all_user_logins = " ".join(f"@{u}" for u in all_users)
     content = render_template(
         template_name="ISSUE",

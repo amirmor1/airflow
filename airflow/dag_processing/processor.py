@@ -23,15 +23,15 @@ import signal
 import threading
 import time
 import zipfile
+from collections.abc import Generator, Iterable
 from contextlib import contextmanager, redirect_stderr, redirect_stdout, suppress
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generator, Iterable
+from typing import TYPE_CHECKING
 
 from setproctitle import setproctitle
 from sqlalchemy import delete, event, select
 
 from airflow import settings
-from airflow.api_internal.internal_api_call import internal_api_call
 from airflow.callbacks.callback_requests import (
     DagCallbackRequest,
     TaskCallbackRequest,
@@ -43,6 +43,7 @@ from airflow.models.dag import DAG, DagModel
 from airflow.models.dagbag import DagBag
 from airflow.models.dagwarning import DagWarning, DagWarningType
 from airflow.models.errors import ParseImportError
+from airflow.models.pool import Pool
 from airflow.models.serialized_dag import SerializedDagModel
 from airflow.models.taskinstance import TaskInstance, _run_finished_callback
 from airflow.stats import Stats
@@ -91,7 +92,6 @@ class DagFileProcessorProcess(LoggingMixin, MultiprocessingStartMethodMixin):
     Runs DAG processing in a separate process using DagFileProcessor.
 
     :param file_path: a Python file containing Airflow DAG definitions
-    :param dag_ids: If specified, only look at these DAG ID's
     :param callback_requests: failure callback to execute
     """
 
@@ -101,17 +101,15 @@ class DagFileProcessorProcess(LoggingMixin, MultiprocessingStartMethodMixin):
     def __init__(
         self,
         file_path: str,
-        dag_ids: list[str] | None,
         dag_directory: str,
         callback_requests: list[CallbackRequest],
     ):
         super().__init__()
         self._file_path = file_path
-        self._dag_ids = dag_ids
         self._dag_directory = dag_directory
         self._callback_requests = callback_requests
 
-        # The process that was launched to process the given .
+        # The process that was launched to process the given DAG file.
         self._process: multiprocessing.process.BaseProcess | None = None
         # The result of DagFileProcessor.process_file(file_path).
         self._result: tuple[int, int, int] | None = None
@@ -119,7 +117,7 @@ class DagFileProcessorProcess(LoggingMixin, MultiprocessingStartMethodMixin):
         self._done = False
         # When the process started.
         self._start_time: datetime | None = None
-        # This ID is use to uniquely name the process / thread that's launched
+        # This ID is used to uniquely name the process / thread that's launched
         # by this processor instance
         self._instance_id = DagFileProcessorProcess.class_creation_counter
 
@@ -135,7 +133,6 @@ class DagFileProcessorProcess(LoggingMixin, MultiprocessingStartMethodMixin):
         result_channel: MultiprocessingConnection,
         parent_channel: MultiprocessingConnection,
         file_path: str,
-        dag_ids: list[str] | None,
         thread_name: str,
         dag_directory: str,
         callback_requests: list[CallbackRequest],
@@ -146,8 +143,6 @@ class DagFileProcessorProcess(LoggingMixin, MultiprocessingStartMethodMixin):
         :param result_channel: the connection to use for passing back the result
         :param parent_channel: the parent end of the channel to close in the child
         :param file_path: the file to process
-        :param dag_ids: if specified, only examine DAG ID's that are
-            in this list
         :param thread_name: the name to use for the process that is launched
         :param callback_requests: failure callback to execute
         :return: the process that was launched
@@ -173,7 +168,7 @@ class DagFileProcessorProcess(LoggingMixin, MultiprocessingStartMethodMixin):
             threading.current_thread().name = thread_name
 
             log.info("Started process (PID=%s) to work on %s", os.getpid(), file_path)
-            dag_file_processor = DagFileProcessor(dag_ids=dag_ids, dag_directory=dag_directory, log=log)
+            dag_file_processor = DagFileProcessor(dag_directory=dag_directory, log=log)
             result: tuple[int, int, int] = dag_file_processor.process_file(
                 file_path=file_path,
                 callback_requests=callback_requests,
@@ -189,9 +184,11 @@ class DagFileProcessorProcess(LoggingMixin, MultiprocessingStartMethodMixin):
                 # The following line ensures that stdout goes to the same destination as the logs. If stdout
                 # gets sent to logs and logs are sent to stdout, this leads to an infinite loop. This
                 # necessitates this conditional based on the value of DAG_PROCESSOR_LOG_TARGET.
-                with redirect_stdout(StreamLogWriter(log, logging.INFO)), redirect_stderr(
-                    StreamLogWriter(log, logging.WARNING)
-                ), Stats.timer() as timer:
+                with (
+                    redirect_stdout(StreamLogWriter(log, logging.INFO)),
+                    redirect_stderr(StreamLogWriter(log, logging.WARNING)),
+                    Stats.timer() as timer,
+                ):
                     _handle_dag_file_processing()
             log.info("Processing %s took %.3f seconds", file_path, timer.duration)
         except Exception:
@@ -238,7 +235,6 @@ class DagFileProcessorProcess(LoggingMixin, MultiprocessingStartMethodMixin):
                 _child_channel,
                 _parent_channel,
                 self.file_path,
-                self._dag_ids,
                 f"DagFileProcessor{self._instance_id}",
                 self._dag_directory,
                 self._callback_requests,
@@ -412,22 +408,19 @@ class DagFileProcessor(LoggingMixin):
 
     Returns a tuple of 'number of dags found' and 'the count of import errors'
 
-    :param dag_ids: If specified, only look at these DAG ID's
     :param log: Logger to save the processing process
     """
 
     UNIT_TEST_MODE: bool = conf.getboolean("core", "UNIT_TEST_MODE")
 
-    def __init__(self, dag_ids: list[str] | None, dag_directory: str, log: logging.Logger):
+    def __init__(self, dag_directory: str, log: logging.Logger):
         super().__init__()
-        self.dag_ids = dag_ids
         self._log = log
         self._dag_directory = dag_directory
         self.dag_warnings: set[tuple[str, str]] = set()
         self._last_num_of_db_queries = 0
 
     @staticmethod
-    @internal_api_call
     @provide_session
     def update_import_errors(
         file_last_changed: dict[str, datetime],
@@ -491,7 +484,8 @@ class DagFileProcessor(LoggingMixin):
         session.flush()
 
     @classmethod
-    def update_dag_warnings(cla, *, dagbag: DagBag) -> None:
+    @provide_session
+    def update_dag_warnings(cla, *, dagbag: DagBag, session: Session = NEW_SESSION) -> None:
         """Validate and raise exception if any task in a dag is using a non-existent pool."""
 
         def get_pools(dag) -> dict[str, set[str]]:
@@ -501,15 +495,6 @@ class DagFileProcessor(LoggingMixin):
         for dag in dagbag.dags.values():
             pool_dict.update(get_pools(dag))
         dag_ids = {dag.dag_id for dag in dagbag.dags.values()}
-        return DagFileProcessor._validate_task_pools_and_update_dag_warnings(pool_dict, dag_ids)
-
-    @classmethod
-    @internal_api_call
-    @provide_session
-    def _validate_task_pools_and_update_dag_warnings(
-        cls, pool_dict: dict[str, set[str]], dag_ids: set[str], session: Session = NEW_SESSION
-    ) -> None:
-        from airflow.models.pool import Pool
 
         all_pools = {p.pool for p in Pool.get_pools(session)}
         warnings: set[DagWarning] = set()
@@ -538,11 +523,8 @@ class DagFileProcessor(LoggingMixin):
 
         for warning_to_add in warnings:
             session.merge(warning_to_add)
-        session.flush()
-        session.commit()
 
     @classmethod
-    @internal_api_call
     @provide_session
     def execute_callbacks(
         cls,
@@ -579,7 +561,6 @@ class DagFileProcessor(LoggingMixin):
         session.commit()
 
     @classmethod
-    @internal_api_call
     @provide_session
     def execute_callbacks_without_dag(
         cls, callback_requests: list[CallbackRequest], unit_test_mode: bool, session: Session = NEW_SESSION
@@ -618,8 +599,6 @@ class DagFileProcessor(LoggingMixin):
             DAG.execute_callback(callbacks, context, dag.dag_id)
 
     @classmethod
-    @internal_api_call
-    @provide_session
     def _execute_task_callbacks(
         cls, dagbag: DagBag | None, request: TaskCallbackRequest, unit_test_mode: bool, session: Session
     ) -> None:
@@ -776,7 +755,6 @@ class DagFileProcessor(LoggingMixin):
         return self._last_num_of_db_queries
 
     @staticmethod
-    @internal_api_call
     @provide_session
     def save_dag_to_db(
         dags: dict[str, DAG],
