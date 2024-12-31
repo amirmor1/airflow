@@ -113,27 +113,29 @@ const eventsColumn = (
 
 export const Events = () => {
   const { dagId, runId, taskId } = useParams();
-  const { setTableURLState, tableURLState } = useTableURLState({
-    sorting: [{ desc: true, id: "when" }],
-  });
+  const { setTableURLState, tableURLState } = useTableURLState();
   const { pagination, sorting } = tableURLState;
   const [sort] = sorting;
 
-  const orderBy = sort ? `${sort.desc ? "-" : ""}${sort.id}` : undefined;
+  const orderBy = sort ? `${sort.desc ? "-" : ""}${sort.id}` : "-when";
 
   const {
     data,
     error: EventsError,
     isFetching,
     isLoading,
-  } = useEventLogServiceGetEventLogs({
-    dagId,
-    limit: pagination.pageSize,
-    offset: pagination.pageIndex * pagination.pageSize,
-    orderBy,
-    runId,
-    taskId,
-  });
+  } = useEventLogServiceGetEventLogs(
+    {
+      dagId,
+      limit: pagination.pageSize,
+      offset: pagination.pageIndex * pagination.pageSize,
+      orderBy,
+      runId,
+      taskId,
+    },
+    undefined,
+    { enabled: !isNaN(pagination.pageSize) },
+  );
 
   return (
     <Box>

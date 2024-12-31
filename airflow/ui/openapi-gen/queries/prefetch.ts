@@ -15,6 +15,7 @@ import {
   DashboardService,
   EventLogService,
   ExtraLinksService,
+  GridService,
   ImportErrorService,
   JobService,
   MonitorService,
@@ -167,6 +168,8 @@ export const prefetchUseAssetServiceGetAssetAlias = (
  * @param data.sourceTaskId
  * @param data.sourceRunId
  * @param data.sourceMapIndex
+ * @param data.timestampGte
+ * @param data.timestampLte
  * @returns AssetEventCollectionResponse Successful Response
  * @throws ApiError
  */
@@ -181,6 +184,8 @@ export const prefetchUseAssetServiceGetAssetEvents = (
     sourceMapIndex,
     sourceRunId,
     sourceTaskId,
+    timestampGte,
+    timestampLte,
   }: {
     assetId?: number;
     limit?: number;
@@ -190,6 +195,8 @@ export const prefetchUseAssetServiceGetAssetEvents = (
     sourceMapIndex?: number;
     sourceRunId?: string;
     sourceTaskId?: string;
+    timestampGte?: string;
+    timestampLte?: string;
   } = {},
 ) =>
   queryClient.prefetchQuery({
@@ -202,6 +209,8 @@ export const prefetchUseAssetServiceGetAssetEvents = (
       sourceMapIndex,
       sourceRunId,
       sourceTaskId,
+      timestampGte,
+      timestampLte,
     }),
     queryFn: () =>
       AssetService.getAssetEvents({
@@ -213,6 +222,8 @@ export const prefetchUseAssetServiceGetAssetEvents = (
         sourceMapIndex,
         sourceRunId,
         sourceTaskId,
+        timestampGte,
+        timestampLte,
       }),
   });
 /**
@@ -486,9 +497,10 @@ export const prefetchUseDashboardServiceHistoricalMetrics = (
  * Get Structure Data.
  * @param data The data for the request.
  * @param data.dagId
- * @param data.root
  * @param data.includeUpstream
  * @param data.includeDownstream
+ * @param data.root
+ * @param data.externalDependencies
  * @returns StructureDataResponse Successful Response
  * @throws ApiError
  */
@@ -496,11 +508,13 @@ export const prefetchUseStructureServiceStructureData = (
   queryClient: QueryClient,
   {
     dagId,
+    externalDependencies,
     includeDownstream,
     includeUpstream,
     root,
   }: {
     dagId: string;
+    externalDependencies?: boolean;
     includeDownstream?: boolean;
     includeUpstream?: boolean;
     root?: string;
@@ -509,6 +523,7 @@ export const prefetchUseStructureServiceStructureData = (
   queryClient.prefetchQuery({
     queryKey: Common.UseStructureServiceStructureDataKeyFn({
       dagId,
+      externalDependencies,
       includeDownstream,
       includeUpstream,
       root,
@@ -516,6 +531,7 @@ export const prefetchUseStructureServiceStructureData = (
     queryFn: () =>
       StructureService.structureData({
         dagId,
+        externalDependencies,
         includeDownstream,
         includeUpstream,
         root,
@@ -611,6 +627,81 @@ export const prefetchUseBackfillServiceGetBackfill = (
   queryClient.prefetchQuery({
     queryKey: Common.UseBackfillServiceGetBackfillKeyFn({ backfillId }),
     queryFn: () => BackfillService.getBackfill({ backfillId }),
+  });
+/**
+ * Grid Data
+ * Return grid data.
+ * @param data The data for the request.
+ * @param data.dagId
+ * @param data.includeUpstream
+ * @param data.includeDownstream
+ * @param data.logicalDateGte
+ * @param data.logicalDateLte
+ * @param data.root
+ * @param data.offset
+ * @param data.runType
+ * @param data.state
+ * @param data.limit
+ * @param data.orderBy
+ * @returns GridResponse Successful Response
+ * @throws ApiError
+ */
+export const prefetchUseGridServiceGridData = (
+  queryClient: QueryClient,
+  {
+    dagId,
+    includeDownstream,
+    includeUpstream,
+    limit,
+    logicalDateGte,
+    logicalDateLte,
+    offset,
+    orderBy,
+    root,
+    runType,
+    state,
+  }: {
+    dagId: string;
+    includeDownstream?: boolean;
+    includeUpstream?: boolean;
+    limit?: number;
+    logicalDateGte?: string;
+    logicalDateLte?: string;
+    offset?: number;
+    orderBy?: string;
+    root?: string;
+    runType?: string[];
+    state?: string[];
+  },
+) =>
+  queryClient.prefetchQuery({
+    queryKey: Common.UseGridServiceGridDataKeyFn({
+      dagId,
+      includeDownstream,
+      includeUpstream,
+      limit,
+      logicalDateGte,
+      logicalDateLte,
+      offset,
+      orderBy,
+      root,
+      runType,
+      state,
+    }),
+    queryFn: () =>
+      GridService.gridData({
+        dagId,
+        includeDownstream,
+        includeUpstream,
+        limit,
+        logicalDateGte,
+        logicalDateLte,
+        offset,
+        orderBy,
+        root,
+        runType,
+        state,
+      }),
   });
 /**
  * Get Connection

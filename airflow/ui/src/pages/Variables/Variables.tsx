@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Box, VStack } from "@chakra-ui/react";
+import { Box, Flex, HStack, Spacer, VStack } from "@chakra-ui/react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -32,34 +32,43 @@ import {
   type SearchParamsKeysType,
 } from "src/constants/searchParams";
 
+import ImportVariablesButton from "./ImportVariablesButton";
+import AddVariableButton from "./ManageVariable/AddVariableButton";
+import DeleteVariableButton from "./ManageVariable/DeleteVariableButton";
+import EditVariableButton from "./ManageVariable/EditVariableButton";
+
 const columns: Array<ColumnDef<VariableResponse>> = [
   {
     accessorKey: "key",
     header: "Key",
-    meta: {
-      skeletonWidth: 25,
-    },
   },
   {
     accessorKey: "value",
     header: "Value",
-    meta: {
-      skeletonWidth: 25,
-    },
   },
   {
     accessorKey: "description",
     header: "Description",
-    meta: {
-      skeletonWidth: 50,
-    },
+  },
+  {
+    accessorKey: "is_encrypted",
+    header: "Is Encrypted",
+  },
+  {
+    accessorKey: "actions",
+    cell: ({ row: { original } }) => (
+      <Flex justifyContent="end">
+        <EditVariableButton variable={original} />
+        <DeleteVariableButton deleteKey={original.key} />
+      </Flex>
+    ),
+    enableSorting: false,
+    header: "",
   },
 ];
 
 export const Variables = () => {
-  const { setTableURLState, tableURLState } = useTableURLState({
-    sorting: [{ desc: false, id: "key" }],
-  });
+  const { setTableURLState, tableURLState } = useTableURLState();
   const [searchParams, setSearchParams] = useSearchParams();
   const { NAME_PATTERN: NAME_PATTERN_PARAM }: SearchParamsKeysType =
     SearchParamsKeys;
@@ -70,7 +79,7 @@ export const Variables = () => {
   const [sort] = sorting;
   const orderBy = sort
     ? `${sort.desc ? "-" : ""}${sort.id === "value" ? "_val" : sort.id}`
-    : undefined;
+    : "-key";
 
   const { data, error, isFetching, isLoading } = useVariableServiceGetVariables(
     {
@@ -106,6 +115,11 @@ export const Variables = () => {
           onChange={handleSearchChange}
           placeHolder="Search Keys"
         />
+        <HStack gap={4} mt={2}>
+          <ImportVariablesButton />
+          <Spacer />
+          <AddVariableButton />
+        </HStack>
       </VStack>
       <Box>
         <DataTable
@@ -115,7 +129,7 @@ export const Variables = () => {
           initialState={tableURLState}
           isFetching={isFetching}
           isLoading={isLoading}
-          modelName="Variables"
+          modelName="Variable"
           onStateChange={setTableURLState}
           total={data ? data.total_entries : 0}
         />

@@ -187,7 +187,7 @@ class AirflowConfigParser(ConfigParser):
 
     This is a subclass of ConfigParser that supports defaults and deprecated options.
 
-    The defaults are stored in the ``_default_values ConfigParser. The configuration description keeps
+    The defaults are stored in the ``_default_values``. The configuration description keeps
     description of all the options available in Airflow (description follow config.yaml.schema).
 
     :param default_config: default configuration (in the form of ini file).
@@ -209,6 +209,7 @@ class AirflowConfigParser(ConfigParser):
         # interpolation placeholders. The _default_values config parser will interpolate them
         # properly when we call get() on it.
         self._default_values = create_default_config_parser(self.configuration_description)
+        self._provider_config_fallback_default_values = create_provider_config_fallback_defaults()
         if default_config is not None:
             self._update_defaults_from_string(default_config)
         self._update_logging_deprecated_template_to_one_from_defaults()
@@ -290,6 +291,10 @@ class AirflowConfigParser(ConfigParser):
         if raw and value is not None:
             return value.replace("%", "%%")
         return value
+
+    def get_provider_config_fallback_defaults(self, section: str, key: str, **kwargs) -> Any:
+        """Get provider config fallback default values."""
+        return self._provider_config_fallback_default_values.get(section, key, fallback=None, **kwargs)
 
     # These configuration elements can be fetched as the stdout of commands
     # following the "{section}__{name}_cmd" pattern, the idea behind this
@@ -449,8 +454,6 @@ class AirflowConfigParser(ConfigParser):
         elif not with_providers and self._providers_configuration_loaded:
             reload_providers_when_leaving = True
             self.restore_core_default_configuration()
-        elif self._providers_configuration_loaded:
-            reload_providers_when_leaving = True
         yield
         if reload_providers_when_leaving:
             self.load_providers_configuration()
@@ -986,6 +989,10 @@ class AirflowConfigParser(ConfigParser):
         if self.get_default_value(section, key) is not None or "fallback" in kwargs:
             return expand_env_var(self.get_default_value(section, key, **kwargs))
 
+        if self.get_provider_config_fallback_defaults(section, key) is not None:
+            # no expansion needed
+            return self.get_provider_config_fallback_defaults(section, key, **kwargs)
+
         if not suppress_warnings:
             log.warning("section/key [%s/%s] not found in config", section, key)
 
@@ -1375,6 +1382,7 @@ class AirflowConfigParser(ConfigParser):
 
         # We check sequentially all those sources and the last one we saw it in will "win"
         configs: Iterable[tuple[str, ConfigParser]] = [
+            ("provider-fallback-defaults", self._provider_config_fallback_default_values),
             ("default", self._default_values),
             ("airflow.cfg", self),
         ]
@@ -1891,6 +1899,30 @@ def create_default_config_parser(configuration_description: dict[str, dict[str, 
                 else:
                     parser.set(section, key, default_value.format(**all_vars))
     return parser
+
+
+def create_provider_config_fallback_defaults() -> ConfigParser:
+    """
+    Create fallback defaults.
+
+    This parser contains provider defaults for Airflow configuration, containing fallback default values
+    that might be needed when provider classes are being imported - before provider's configuration
+    is loaded.
+
+    Unfortunately airflow currently performs a lot of stuff during importing and some of that might lead
+    to retrieving provider configuration before the defaults for the provider are loaded.
+
+    Those are only defaults, so if you have "real" values configured in your configuration (.cfg file or
+    environment variables) those will be used as usual.
+
+    NOTE!! Do NOT attempt to remove those default fallbacks thinking that they are unnecessary duplication,
+    at least not until we fix the way how airflow imports "do stuff". This is unlikely to succeed.
+
+    You've been warned!
+    """
+    config_parser = ConfigParser()
+    config_parser.read(_default_config_file_path("provider_config_fallback_defaults.cfg"))
+    return config_parser
 
 
 def write_default_airflow_configuration_if_needed() -> AirflowConfigParser:

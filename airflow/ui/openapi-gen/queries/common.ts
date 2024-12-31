@@ -16,6 +16,7 @@ import {
   DashboardService,
   EventLogService,
   ExtraLinksService,
+  GridService,
   ImportErrorService,
   JobService,
   MonitorService,
@@ -137,6 +138,8 @@ export const UseAssetServiceGetAssetEventsKeyFn = (
     sourceMapIndex,
     sourceRunId,
     sourceTaskId,
+    timestampGte,
+    timestampLte,
   }: {
     assetId?: number;
     limit?: number;
@@ -146,6 +149,8 @@ export const UseAssetServiceGetAssetEventsKeyFn = (
     sourceMapIndex?: number;
     sourceRunId?: string;
     sourceTaskId?: string;
+    timestampGte?: string;
+    timestampLte?: string;
   } = {},
   queryKey?: Array<unknown>,
 ) => [
@@ -160,6 +165,8 @@ export const UseAssetServiceGetAssetEventsKeyFn = (
       sourceMapIndex,
       sourceRunId,
       sourceTaskId,
+      timestampGte,
+      timestampLte,
     },
   ]),
 ];
@@ -387,11 +394,13 @@ export const useStructureServiceStructureDataKey =
 export const UseStructureServiceStructureDataKeyFn = (
   {
     dagId,
+    externalDependencies,
     includeDownstream,
     includeUpstream,
     root,
   }: {
     dagId: string;
+    externalDependencies?: boolean;
     includeDownstream?: boolean;
     includeUpstream?: boolean;
     root?: string;
@@ -399,7 +408,9 @@ export const UseStructureServiceStructureDataKeyFn = (
   queryKey?: Array<unknown>,
 ) => [
   useStructureServiceStructureDataKey,
-  ...(queryKey ?? [{ dagId, includeDownstream, includeUpstream, root }]),
+  ...(queryKey ?? [
+    { dagId, externalDependencies, includeDownstream, includeUpstream, root },
+  ]),
 ];
 export type BackfillServiceListBackfillsDefaultResponse = Awaited<
   ReturnType<typeof BackfillService.listBackfills>
@@ -471,6 +482,59 @@ export const UseBackfillServiceGetBackfillKeyFn = (
   },
   queryKey?: Array<unknown>,
 ) => [useBackfillServiceGetBackfillKey, ...(queryKey ?? [{ backfillId }])];
+export type GridServiceGridDataDefaultResponse = Awaited<
+  ReturnType<typeof GridService.gridData>
+>;
+export type GridServiceGridDataQueryResult<
+  TData = GridServiceGridDataDefaultResponse,
+  TError = unknown,
+> = UseQueryResult<TData, TError>;
+export const useGridServiceGridDataKey = "GridServiceGridData";
+export const UseGridServiceGridDataKeyFn = (
+  {
+    dagId,
+    includeDownstream,
+    includeUpstream,
+    limit,
+    logicalDateGte,
+    logicalDateLte,
+    offset,
+    orderBy,
+    root,
+    runType,
+    state,
+  }: {
+    dagId: string;
+    includeDownstream?: boolean;
+    includeUpstream?: boolean;
+    limit?: number;
+    logicalDateGte?: string;
+    logicalDateLte?: string;
+    offset?: number;
+    orderBy?: string;
+    root?: string;
+    runType?: string[];
+    state?: string[];
+  },
+  queryKey?: Array<unknown>,
+) => [
+  useGridServiceGridDataKey,
+  ...(queryKey ?? [
+    {
+      dagId,
+      includeDownstream,
+      includeUpstream,
+      limit,
+      logicalDateGte,
+      logicalDateLte,
+      offset,
+      orderBy,
+      root,
+      runType,
+      state,
+    },
+  ]),
+];
 export type ConnectionServiceGetConnectionDefaultResponse = Awaited<
   ReturnType<typeof ConnectionService.getConnection>
 >;
@@ -1708,6 +1772,9 @@ export type PoolServicePostPoolsMutationResult = Awaited<
 >;
 export type VariableServicePostVariableMutationResult = Awaited<
   ReturnType<typeof VariableService.postVariable>
+>;
+export type VariableServiceImportVariablesMutationResult = Awaited<
+  ReturnType<typeof VariableService.importVariables>
 >;
 export type BackfillServicePauseBackfillMutationResult = Awaited<
   ReturnType<typeof BackfillService.pauseBackfill>
